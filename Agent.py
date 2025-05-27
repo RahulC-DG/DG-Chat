@@ -10,10 +10,13 @@ from deepgram import (
     FunctionCallResponse,
     Input,
     Output,
+    AgentKeepAlive,
 )
 import os
 import json
 from dotenv import load_dotenv
+import threading
+import time
 load_dotenv()
 
 chatbot = DeepgramChat()
@@ -113,7 +116,13 @@ def handle_connect():
             # Get response from the chatbot
             chat_result = chatbot.get_answer(user_message) #this is breaking...
 
+            print(f"INPUT::::  {conversation_text.__dict__}")
+            print(f"RESULTS::::  {chat_result}")
             #voice is working again but it's not taking data from...
+
+            #"Tell me about yourself"
+            #"Tell me about the voice agent"
+            #"Help me configure the voice agent api with the aura-2 model"
             
             # Create response that includes both the chat answer and voice data
             response = {
@@ -173,6 +182,18 @@ def handle_connect():
         socketio.emit('error', {'data': {'message': 'Failed to start connection'}})
         return
     print("Deepgram connection started successfully")
+
+    # Start keep-alive thread
+    def keep_alive():
+        while True:
+            try:
+                dg_connection.send(str(AgentKeepAlive()))
+                print("Sent keep-alive message")
+            except Exception as e:
+                print(f"Error sending keep-alive: {e}")
+            time.sleep(5)
+
+    threading.Thread(target=keep_alive, daemon=True).start()
 
 @socketio.on('audio_data')
 def handle_audio_data(data):

@@ -166,42 +166,47 @@
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
 
-        // Audio recording functions
-        async function startRecording() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                mediaRecorder = new MediaRecorder(stream);
-                
-                mediaRecorder.ondataavailable = (event) => {
-                    if (event.data.size > 0) {
-                        audioChunks.push(event.data);
-                        // Convert audio data to array buffer and send
-                        event.data.arrayBuffer().then(buffer => {
-                            socket.emit('audio_data', new Uint8Array(buffer));
-                        });
-                    }
-                };
+        let audioContext, processor, input, globalStream;
 
-                mediaRecorder.start(250); // Collect data every 100ms
-                isRecording = true;
-                startButton.disabled = true;
-                stopButton.disabled = false;
-                statusDiv.textContent = 'Recording...';
-            } catch (err) {
-                console.error('Error accessing microphone:', err);
-                statusDiv.textContent = 'Error accessing microphone';
-            }
+        async function startRecording() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            globalStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            input = audioContext.createMediaStreamSource(globalStream);
+
+            processor = audioContext.createScriptProcessor(4096, 1, 1);
+            input.connect(processor);
+            processor.connect(audioContext.destination);
+
+            processor.onaudioprocess = function(e) {
+                const inputData = e.inputBuffer.getChannelData(0);
+                // Convert Float32Array [-1,1] to Int16Array
+                let pcm = new Int16Array(inputData.length);
+                for (let i = 0; i < inputData.length; i++) {
+                    let s = Math.max(-1, Math.min(1, inputData[i]));
+                    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+                // Send as ArrayBuffer
+                socket.emit('audio_data', pcm.buffer);
+            };
+
+            startButton.disabled = true;
+            stopButton.disabled = false;
+            statusDiv.textContent = 'Recording...';
         }
 
         function stopRecording() {
-            if (mediaRecorder && isRecording) {
-                mediaRecorder.stop();
-                mediaRecorder.stream.getTracks().forEach(track => track.stop());
-                isRecording = false;
-                startButton.disabled = false;
-                stopButton.disabled = true;
-                statusDiv.textContent = 'Connected';
+            if (processor) {
+                processor.disconnect();
+                processor.onaudioprocess = null;
             }
+            if (input) input.disconnect();
+            if (audioContext) audioContext.close();
+            if (globalStream) {
+                globalStream.getTracks().forEach(track => track.stop());
+            }
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            statusDiv.textContent = 'Connected';
         }
 
         // Event listeners
