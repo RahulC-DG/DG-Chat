@@ -106,7 +106,7 @@
             const response = data.data;
             
             // Add user message
-            addMessage(response.voice_data.text, 'user');
+            addMessage(response.voice_data.content, 'user');
             
             // Add assistant message with sources if available
             if (response.source === 'hybrid') {
@@ -116,7 +116,7 @@
                 console.log('Response metadata:', response.metadata);
             } else {
                 // Voice-only response
-                addMessage(response.text, 'assistant');
+                addMessage(response.content, 'assistant');
                 console.log('Voice-only response:', response.metadata);
             }
             
@@ -182,7 +182,7 @@
                     }
                 };
 
-                mediaRecorder.start(100); // Collect data every 100ms
+                mediaRecorder.start(250); // Collect data every 100ms
                 isRecording = true;
                 startButton.disabled = true;
                 stopButton.disabled = false;

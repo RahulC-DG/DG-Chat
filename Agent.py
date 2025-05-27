@@ -34,7 +34,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", path='/socket.io')
 config = DeepgramClientOptions(
     options={
         "keepalive": "true",
-        "microphone_record": "true",
+        "microphone_record": "true",        
         "speaker_playback": "true",
     }
 )
@@ -108,14 +108,16 @@ def handle_connect():
         print("Conversation event received:", conversation_text.__dict__)
         try:
             # Get the user's message
-            user_message = conversation_text.text
+            user_message = conversation_text.content
             
             # Get response from the chatbot
-            chat_result = chatbot.get_answer(user_message)
+            chat_result = chatbot.get_answer(user_message) #this is breaking...
+
+            #voice is working again but it's not taking data from...
             
             # Create response that includes both the chat answer and voice data
             response = {
-                'text': chat_result["answer"],
+                'text': chat_result["answer"],                
                 'sources': chat_result["sources"],
                 'voice_data': conversation_text.__dict__,
                 'metadata': chat_result["metadata"]
@@ -180,7 +182,7 @@ def handle_audio_data(data):
             # Convert to bytes if needed
             if isinstance(data, list):
                 data = bytes(data)
-            dg_connection.send_audio(data)
+            dg_connection.send(data)
         else:
             print("No Deepgram connection available")
             socketio.emit('error', {'data': {'message': 'No Deepgram connection available'}})
