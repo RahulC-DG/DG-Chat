@@ -6,16 +6,82 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f7f9;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
         }
+        .header {
+            background-color: #fff;
+            padding: 15px 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+        }
+        .header img {
+            height: 30px;
+            margin-right: 10px;
+        }
+        .header-title {
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        .header-subtitle {
+            font-size: 0.9em;
+            color: #555;
+        }
+        .container {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            text-align: center;
+        }
+        .welcome-section h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        .welcome-section p {
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .suggestions {
+            background-color: #f3e5f5; /* Light purple background */
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 40px;
+            text-align: left;
+        }
+        .suggestions h3 {
+            margin-top: 0;
+            font-size: 1.1em;
+            color: #4a148c; /* Dark purple text */
+        }
+        .suggestions ul {
+            list-style: disc;
+            padding-left: 20px;
+            margin: 10px 0 0 0;
+            color: #4a148c;
+        }
+        .suggestions li {
+            margin-bottom: 8px;
+        }
+
+        /* Chat container - Keeping but not prominent in initial view */
         #chat-container {
+            display: none; /* Hide initially to match the image */
+            width: 100%;
+            max-width: 800px;
             height: 400px;
             overflow-y: auto;
             border: 1px solid #ccc;
             padding: 10px;
             margin-bottom: 20px;
+            background-color: #fff;
         }
         .message {
             margin: 10px;
@@ -52,116 +118,218 @@
         .sources a:hover {
             text-decoration: underline;
         }
-        #controls {
+
+        /* Microphone control area */
+        .microphone-control {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background-color: #fff;
+            padding: 20px;
             text-align: center;
+            box-shadow: 0 -2px 4px rgba(0,0,0,0.1);
         }
-        button {
-            padding: 10px 20px;
-            margin: 0 10px;
-            font-size: 16px;
+        .microphone-button {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background-color: #7e57c2; /* Purple */
+            border: none;
+            color: white;
+            font-size: 24px;
             cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 10px auto;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            transition: background-color 0.3s ease;
         }
-        #status {
-            padding: 10px;
-            margin: 10px 0;
+        .microphone-button:hover {
+            background-color: #673ab7; /* Darker purple */
+        }
+        .microphone-button i {
+             /* Using a placeholder for icon as we don't have a font-awesome CDN */
+             font-style: normal;
+        }
+        .recording-text {
+            font-size: 0.9em;
+            color: #555;
+        }
+        .waveform {
+            height: 20px; /* Placeholder for waveform visual */
+            margin-bottom: 10px;
+            background-color: #e1bee7; /* Light purple */
             border-radius: 5px;
+            display: none; /* Hide initially */
         }
-        #status.error {
-            background-color: #ffebee;
-            color: #c62828;
+        .recording .waveform {
+            display: block; /* Show when recording */
+            /* Add animation or visualizer library here later if needed */
+        }
+         .recording .microphone-button {
+            background-color: #ef5350; /* Red when recording */
+         }
+         .recording .recording-text {
+             content: "Recording..."; /* Text changes when recording */
+         }
+
+        /* Status div - Keeping but adapting */
+        #status {
+            display: none; /* Hide status messages on the UI for this design */
         }
     </style>
 </head>
 <body>
-    <h1>Deepgram Voice Assistant</h1>
-    <div id="status">Connecting...</div>
-    <div id="chat-container"></div>
-    <div id="controls">
-        <button id="startButton">Start Recording</button>
-        <button id="stopButton" disabled>Stop Recording</button>
+    <div class="header">
+        <!-- Placeholder for icon - you might need to add an actual image source -->
+        <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiBmaWxsPSIjN2U1N2MyIj4KICAgIDxwYXRoIGQ9Ik0xMiAxQzYuNDggMSAyIDUuNDggMiAxMnM0LjQ4IDExIDEwIDExIDExLTQuOTMgMTEtMTFWMS41QzIzIDIuMjIgMjAuNDkgMy41IDExIDMuNVMxIDYuMjcgMSA5LjVDMSAxNC43NSAxMCAxNy43NSAxMCAyMiA1IDE5LjcyIDMgMTYuMzUgMyAxMlM1IDIgMTIgMlMxOSA2IDE5IDEwYzAgNC45Ni05IDcuOTYtOSAxMiAwLjg0IDIuNDcgMi4zNSA0LjQ4IDQuMjcgNS45NCA3LjUtMi44MSA3LjUtNS42NiA3LjUtMTAuOTRzLTkuMjUtNS4wNi0xMi01LjA2eiI+PC9wYXRoPgo8L3N2Zz4=" alt="Voice Assistant Icon">
+        <div>
+            <div class="header-title">Voice Assistant</div>
+            <div class="header-subtitle">Powered by Deepgram Voice Agent</div>
+        </div>
     </div>
+
+    <div class="container">
+        <div class="welcome-section">
+            <h1>Welcome to Deepgram Voice Agent</h1>
+            <p>Ask me anything by voice or text, and I'll provide answers using the latest information.</p>
+        </div>
+        <div class="suggestions">
+            <h3>Try asking questions like:</h3>
+            <ul>
+                <li>"What are the main features of Deepgram's API?"</li>
+                <li>"How can I implement real-time transcription?"</li>
+                <li>"Explain RAG chatbots and their advantages"</li>
+            </ul>
+        </div>
+
+        <!-- Chat container (initially hidden) -->
+        <div id="chat-container"></div>
+
+        <!-- Status div (initially hidden from view) -->
+        <div id="status">Connecting...</div>
+    </div>
+
+    <div class="microphone-control">
+        <div class="waveform"></div> <!-- Placeholder for waveform -->
+        <button id="microphoneButton" class="microphone-button">
+             <i>&#x1F3A4;</i> <!-- Unicode microphone icon as a placeholder -->
+        </button>
+        <div id="recordingText" class="recording-text">Click to start recording</div>
+    </div>
+
 
     <script>
         const socket = io();
         let mediaRecorder;
         let audioChunks = [];
         let isRecording = false;
+        let isAssistantSpeaking = false;
 
         // DOM Elements
-        const startButton = document.getElementById('startButton');
-        const stopButton = document.getElementById('stopButton');
-        const chatContainer = document.getElementById('chat-container');
-        const statusDiv = document.getElementById('status');
+        const microphoneButton = document.getElementById('microphoneButton');
+        const recordingText = document.getElementById('recordingText');
+        const chatContainer = document.getElementById('chat-container'); // Kept for conversation history
+        const statusDiv = document.getElementById('status'); // Kept for background status
 
         // Socket event handlers
         socket.on('connect', () => {
             statusDiv.textContent = 'Connected';
+            console.log('Socket connected.');
         });
 
         socket.on('disconnect', () => {
             statusDiv.textContent = 'Disconnected';
+            console.log('Socket disconnected.');
+        });
+
+        socket.on('welcome', (data) => {
+            console.log('Welcome event received:', data);
+            statusDiv.textContent = 'Ready to start';
+            // deepgram_ready flag logic might be better handled server-side or
+            // ensure the client waits for a ready signal before sending audio.
+            // For now, assuming welcome means ready to click record.
         });
 
         socket.on('conversation', (data) => {
-            const response = data.data;
+            const message = data.data;
+            console.log('Conversation message:', message);
+
+            // Show chat container
+            chatContainer.style.display = 'block';
+
+            // Add message to chat
+            addMessage(message.text, message.role, message.sources);
+        });
+
+        socket.on('tts_response', (data) => {
+            const text = data.data.text;
+            console.log('Playing TTS response:', text);
             
-            // Add user message
-            addMessage(response.voice_data.content, 'user');
-            
-            // Add assistant message with sources if available
-            if (response.source === 'hybrid') {
-                addMessage(response.text, 'assistant', response.sources);
-                
-                // Log metadata for debugging
-                console.log('Response metadata:', response.metadata);
-            } else {
-                // Voice-only response
-                addMessage(response.content, 'assistant');
-                console.log('Voice-only response:', response.metadata);
+            // Stop recording while assistant speaks
+            if (isRecording) {
+                stopRecording();
             }
             
-            // Update status
-            statusDiv.textContent = 'Ready';
+            if ('speechSynthesis' in window) {
+                isAssistantSpeaking = true;
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.rate = 0.9;
+                utterance.pitch = 1;
+                
+                utterance.onend = () => {
+                    isAssistantSpeaking = false;
+                    console.log('TTS finished');
+                };
+                
+                speechSynthesis.speak(utterance);
+            }
+        });
+
+        socket.on('thinking', (data) => {
+            console.log('Agent thinking:', data);
+            statusDiv.textContent = 'Agent is thinking...';
+            // Optionally update UI to show thinking state
         });
 
         socket.on('error', (data) => {
             console.error('Error:', data);
             statusDiv.textContent = `Error: ${data.data.message}`;
             statusDiv.className = 'error';
-            
+
             // Add error message to chat
             addMessage(`Error: ${data.data.message}`, 'error');
-        });
-
-        socket.on('welcome', (data) => {
-            console.log('Welcome event received:', data);
-            statusDiv.textContent = 'Ready to start';
+            stopRecording(); // Stop recording on error
         });
 
         // Helper function to add messages to chat
-        function addMessage(text, type, sources = null) {
+        function addMessage(text, role, sources = null) {
             const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${type}`;
-            
+            messageDiv.className = `message ${role}-message`;
+
             const textDiv = document.createElement('div');
             textDiv.className = 'message-text';
             textDiv.textContent = text;
             messageDiv.appendChild(textDiv);
-            
+
             if (sources && sources.length > 0) {
                 const sourcesDiv = document.createElement('div');
                 sourcesDiv.className = 'sources';
                 sourcesDiv.innerHTML = '<strong>Sources:</strong><ul>' +
                     sources.map(source => {
-                        if (source.type === 'documentation') {
+                        if (source.type === 'documentation' && source.url && source.title) {
                             return `<li><a href="${source.url}" target="_blank">${source.title}</a></li>`;
+                        } else if (source.file) {
+                             return `<li>SDK Code: ${source.file}</li>`;
                         } else {
-                            return `<li>SDK Code: ${source.file}</li>`;
+                             return `<li>${JSON.stringify(source)}</li>`;
                         }
                     }).join('') + '</ul>';
                 messageDiv.appendChild(sourcesDiv);
             }
-            
+
             chatContainer.appendChild(messageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
@@ -169,49 +337,141 @@
         let audioContext, processor, input, globalStream;
 
         async function startRecording() {
+            if (isRecording) return;
+
+            isRecording = true;
+            recordingText.textContent = 'Recording...';
+            microphoneButton.classList.add('recording');
+            // waveform visualizer could be started here
+
             audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-            globalStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            try {
+                globalStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } catch (error) {
+                console.error('Error accessing microphone:', error);
+                alert('Could not access your microphone. Please ensure it is connected and allowed.');
+                stopRecording();
+                return;
+            }
+
             input = audioContext.createMediaStreamSource(globalStream);
 
-            processor = audioContext.createScriptProcessor(4096, 1, 1);
-            input.connect(processor);
-            processor.connect(audioContext.destination);
+            // Use AudioWorkletNode for better performance if available
+            if (audioContext.audioWorklet) {
+                try {
+                     await audioContext.audioWorklet.addModule('static/audio-processor.js'); // Assuming you create this file
+                     processor = new AudioWorkletNode(audioContext, 'audio-processor');
+                     processor.connect(audioContext.destination); // Connect to destination to keep it alive
 
-            processor.onaudioprocess = function(e) {
-                const inputData = e.inputBuffer.getChannelData(0);
-                // Convert Float32Array [-1,1] to Int16Array
-                let pcm = new Int16Array(inputData.length);
-                for (let i = 0; i < inputData.length; i++) {
-                    let s = Math.max(-1, Math.min(1, inputData[i]));
-                    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                     processor.port.onmessage = (event) => {
+                         if (event.data.type === 'audioData') {
+                             // Convert Float32Array to Int16Array
+                             let pcm = new Int16Array(event.data.audioBuffer.length);
+                             for (let i = 0; i < event.data.audioBuffer.length; i++) {
+                                 let s = Math.max(-1, Math.min(1, event.data.audioBuffer[i]));
+                                 pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                             }
+                              socket.emit('audio_data', pcm.buffer);
+                         }
+                     };
+                     input.connect(processor);
+
+                } catch (error) {
+                    console.warn('AudioWorklet not available or failed to load, falling back to ScriptProcessor:', error);
+                     // Fallback to ScriptProcessorNode
+                     processor = audioContext.createScriptProcessor(4096, 1, 1);
+                     input.connect(processor);
+                     processor.connect(audioContext.destination); // Connect to destination to keep it alive
+
+                     processor.onaudioprocess = function(e) {
+                        const inputData = e.inputBuffer.getChannelData(0);
+                        // Convert Float32Array [-1,1] to Int16Array
+                        let pcm = new Int16Array(inputData.length);
+                        for (let i = 0; i < inputData.length; i++) {
+                            let s = Math.max(-1, Math.min(1, inputData[i]));
+                            pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                        }
+                        // Send as ArrayBuffer
+                         socket.emit('audio_data', pcm.buffer);
+                    };
                 }
-                // Send as ArrayBuffer
-                socket.emit('audio_data', pcm.buffer);
-            };
+            } else {
+                 // Fallback to ScriptProcessorNode
+                 processor = audioContext.createScriptProcessor(4096, 1, 1);
+                 input.connect(processor);
+                 processor.connect(audioContext.destination); // Connect to destination to keep it alive
 
-            startButton.disabled = true;
-            stopButton.disabled = false;
-            statusDiv.textContent = 'Recording...';
+                 processor.onaudioprocess = function(e) {
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    // Convert Float32Array [-1,1] to Int16Array
+                    let pcm = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                        let s = Math.max(-1, Math.min(1, inputData[i]));
+                        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+                    // Send as ArrayBuffer
+                     socket.emit('audio_data', pcm.buffer);
+                };
+            }
+
+
+            // Optional: Send a start recording event to the server if needed
+            // socket.emit('start_recording');
         }
 
         function stopRecording() {
+            if (!isRecording) return;
+
+            isRecording = false;
+            recordingText.textContent = 'Click to start recording';
+            microphoneButton.classList.remove('recording');
+            // waveform visualizer could be stopped here
+
             if (processor) {
                 processor.disconnect();
-                processor.onaudioprocess = null;
+                 if (processor.port && processor.port.onmessage) processor.port.onmessage = null; // For AudioWorklet
+                 if (processor.onaudioprocess) processor.onaudioprocess = null; // For ScriptProcessor
             }
             if (input) input.disconnect();
-            if (audioContext) audioContext.close();
+            if (audioContext) audioContext.close().catch(e => console.error('Error closing AudioContext:', e));
             if (globalStream) {
                 globalStream.getTracks().forEach(track => track.stop());
             }
-            startButton.disabled = false;
-            stopButton.disabled = true;
-            statusDiv.textContent = 'Connected';
+
+            // Optional: Send a stop recording event to the server if needed
+            // socket.emit('stop_recording');
         }
 
-        // Event listeners
-        startButton.addEventListener('click', startRecording);
-        stopButton.addEventListener('click', stopRecording);
+        // Toggle recording on microphone button click
+        microphoneButton.addEventListener('click', () => {
+            if (isAssistantSpeaking) {
+                console.log('Assistant is speaking, cannot start recording');
+                return;
+            }
+            
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        });
+
+        // Handle potential errors during getUserMedia
+        navigator.mediaDevices.addEventListener('statechange', function() {
+          if (isRecording && globalStream && globalStream.getTracks().every(track => track.readyState === 'ended')) {
+              console.warn('Microphone disconnected during recording.');
+              stopRecording();
+              alert('Microphone disconnected.');
+          }
+        });
+
+        // Basic handling for beforeunload to stop recording if page is closed
+        window.addEventListener('beforeunload', () => {
+            if (isRecording) {
+                stopRecording();
+            }
+        });
+
     </script>
 </body>
 </html> 

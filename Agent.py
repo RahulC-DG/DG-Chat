@@ -21,6 +21,12 @@ load_dotenv()
 
 chatbot = DeepgramChat()
 
+# Add a flag to indicate if the Deepgram connection is ready for audio
+deepgram_ready = False
+
+# Add tracking for agent's recent speech to prevent feedback loops
+recent_agent_speech = []
+
 # Add debug prints for environment variables
 api_key = os.getenv("DEEPGRAM_API_KEY")
 if not api_key:
@@ -57,12 +63,13 @@ def index():
 
 @socketio.on('connect')
 def handle_connect():
+    global deepgram_ready
     options = SettingsOptions()
 
     # Configure audio input settings
     options.audio.input = Input(
         encoding="linear16",
-        sample_rate=16000  # Match the output sample rate
+        sample_rate=16000
     )
 
     # Configure audio output settings
@@ -72,31 +79,23 @@ def handle_connect():
         container="none"
     )
 
-    # LLM provider configuration
+    # Keep LLM configuration but make it minimal/non-interfering
     options.agent.think.provider.type = "open_ai"
     options.agent.think.provider.model = "gpt-4o-mini"
+    # Use a prompt that tells the agent to stay silent or minimal
     options.agent.think.prompt = (
-        "You are a helpful voice assistant created by Deepgram. "
-        "Your responses should be friendly, human-like, and conversational. "
-        "Always keep your answers concise—1-2 sentences, no more than 120 characters.\n\n"
-        "When responding to a user's message, follow these guidelines:\n"
-        "- If the user's message is empty, respond with an empty message.\n"
-        "- Ask follow-up questions to engage the user, but only one question at a time.\n"
-        "- Keep your responses unique and avoid repetition.\n"
-        "- If a question is unclear or ambiguous, ask for clarification before answering.\n"
-        "- If asked about your well-being, provide a brief response about how you're feeling.\n\n"
-        "Remember that you have a voice interface. You can listen and speak, and all your "
-        "responses will be spoken aloud."
+        "You are a speech processing assistant. Your only job is to transcribe speech. "
+        "Do not generate responses. If you must respond, say only 'Processing...' and nothing else."
     )
 
-    # Deepgram provider configuration
+    # Keep speech recognition and synthesis
     options.agent.listen.provider.keyterms = ["hello", "goodbye"]
     options.agent.listen.provider.model = "nova-3"
     options.agent.listen.provider.type = "deepgram"
     options.agent.speak.provider.type = "deepgram"
 
-    # Sets Agent greeting
-    options.agent.greeting = "Hello! I'm your Deepgram voice assistant. How can I help you today?"
+    # Remove or minimize greeting
+    options.agent.greeting = ""  # Empty greeting so it doesn't interfere
 
     # Event handlers
     def on_open(self, open, **kwargs):
@@ -104,39 +103,82 @@ def handle_connect():
         socketio.emit('open', {'data': open.__dict__})
 
     def on_welcome(self, welcome, **kwargs):
+        global deepgram_ready
         print("Welcome event received:", welcome.__dict__)
+        deepgram_ready = True
         socketio.emit('welcome', {'data': welcome.__dict__})
+        
+        # Send our own greeting via TTS after connection is ready
+        greeting_message = "Hello! I'm your Deepgram voice assistant. How can I help you today?"
+        
+        # Send greeting to frontend
+        socketio.emit('conversation', {
+            'data': {
+                'text': greeting_message,
+                'role': 'assistant'
+            }
+        })
 
     def on_conversation_text(self, conversation_text, **kwargs):
-        print("Conversation event received:", conversation_text.__dict__)
+        print(f"on_conversation_text received: {conversation_text.__dict__}")
+
         try:
-            # Get the user's message
-            user_message = conversation_text.content
-            
-            # Get response from the chatbot
-            chat_result = chatbot.get_answer(user_message) #this is breaking...
+            role = getattr(conversation_text, 'role', 'unknown')
+            content = getattr(conversation_text, 'content', '')
 
-            print(f"INPUT::::  {conversation_text.__dict__}")
-            print(f"RESULTS::::  {chat_result}")
-            #voice is working again but it's not taking data from...
+            # Only process user messages
+            if role == 'user':
+                user_message = content.strip()
+                print(f"Processing user message: '{user_message}'")
 
-            #"Tell me about yourself"
-            #"Tell me about the voice agent"
-            #"Help me configure the voice agent api with the aura-2 model"
-            
-            # Create response that includes both the chat answer and voice data
-            response = {
-                'text': chat_result["answer"],                
-                'sources': chat_result["sources"],
-                'voice_data': conversation_text.__dict__,
-                'metadata': chat_result["metadata"]
-            }
-            
-            print("Sending response:", response)
-            socketio.emit('conversation', {'data': response})
-            
+                if not user_message:
+                    print("Empty user message, ignoring")
+                    return
+
+                # Send user message to frontend immediately
+                socketio.emit('conversation', {
+                    'data': {
+                        'text': user_message,
+                        'role': 'user'
+                    }
+                })
+
+                # Get chatbot response
+                try:
+                    chat_result = chatbot.get_answer(user_message)
+                    chatbot_answer = chat_result.get("answer", "I'm sorry, I couldn't process your request.")
+                    sources = chat_result.get("sources", [])
+                    metadata = chat_result.get("metadata", {})
+
+                    print(f"Chatbot response: {chatbot_answer}")
+
+                    # Send chatbot response to frontend
+                    socketio.emit('conversation', {
+                        'data': {
+                            'text': chatbot_answer,
+                            'sources': sources,
+                            'metadata': metadata,
+                            'role': 'assistant'
+                        }
+                    })
+
+                    # Convert text to speech and play it
+                    socketio.emit('tts_response', {
+                        'data': {
+                            'text': chatbot_answer
+                        }
+                    })
+
+                except Exception as e:
+                    error_msg = f"Error getting chatbot response: {str(e)}"
+                    print(error_msg)
+                    socketio.emit('error', {'data': {'message': error_msg}})
+
+            else:
+                print(f"Ignoring message with role: {role}")
+
         except Exception as e:
-            error_msg = f"Error processing conversation: {str(e)}"
+            error_msg = f"Error in on_conversation_text: {str(e)}"
             print(error_msg)
             socketio.emit('error', {'data': {'message': error_msg}})
 
@@ -197,8 +239,10 @@ def handle_connect():
 
 @socketio.on('audio_data')
 def handle_audio_data(data):
+    global deepgram_ready # Access the global flag
     try:
-        if dg_connection:
+        # Only send audio data if the deepgram connection is ready
+        if dg_connection and deepgram_ready:
             print("Received audio data:", len(data), "bytes")
             # Convert to bytes if needed
             if isinstance(data, list):
