@@ -224,6 +224,16 @@ def handle_connect():
                         'role': 'user'
                     }
                 })
+                
+                # Add loading indicator
+                print(f"DEBUG: Sending loading indicator to frontend.")
+                socketio.emit('conversation', {
+                    'data': {
+                        'text': '🤔 Thinking...',
+                        'role': 'assistant',
+                        'is_loading': True
+                    }
+                })
 
                 try:
                     print(f"DEBUG: Getting answer from chatbot for: '{user_message}'")
@@ -233,13 +243,15 @@ def handle_connect():
                     metadata = chat_result.get("metadata", {})
                     print(f"DEBUG: Chatbot responded with: '{chatbot_answer}'")
 
+                    # Remove loading and send real response
                     print(f"DEBUG: Sending chatbot text response to frontend for display.")
                     socketio.emit('conversation', {
                         'data': {
                             'text': chatbot_answer,
                             'sources': sources,
                             'metadata': metadata,
-                            'role': 'assistant'
+                            'role': 'assistant',
+                            'replace_loading': True  # Flag to replace loading message
                         }
                     })
                     
