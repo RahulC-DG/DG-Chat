@@ -1,14 +1,15 @@
-flask==3.0.2
-flask-socketio==5.3.6
+flask>=2.2,<4.0
+flask-socketio>=5.3,<6.0
 python-dotenv==1.0.1
-deepgram-sdk==3.1.0
+deepgram-sdk==4.1.0
 langchain==0.1.9
-langchain-community==0.0.13
+langchain-community>=0.0.21,<0.1.0
 langchain-openai==0.0.2
 openai>=1.6.1,<2.0.0
 faiss-cpu==1.7.4
 numpy==1.26.4
 pyaudio==0.2.13
+langsmith>=0.1.0,<0.2.0
 
 # Note: PortAudio is required for PyAudio
 # On macOS, install with: brew install portaudio
