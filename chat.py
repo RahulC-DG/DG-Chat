@@ -123,7 +123,7 @@ class DeepgramChat:
         # Create custom prompt template
         template = """You are a helpful AI assistant that specializes in Deepgram's APIs and SDKs. 
         Use the following pieces of context to answer the question at the end.
-        If you don't know the answer, just say that you don't know, don't try to make up an answer.
+        If you don't know the answer, just say that you don't know, don't try to make up an answer. Try to keep the answer concise and under 1800 characters.
         
         Context: {context}
         

@@ -231,77 +231,89 @@
         // DOM Elements
         const microphoneButton = document.getElementById('microphoneButton');
         const recordingText = document.getElementById('recordingText');
-        const chatContainer = document.getElementById('chat-container'); // Kept for conversation history
-        const statusDiv = document.getElementById('status'); // Kept for background status
+        const chatContainer = document.getElementById('chat-container');
+        const statusDiv = document.getElementById('status');
 
         // Socket event handlers
         socket.on('connect', () => {
             statusDiv.textContent = 'Connected';
-            console.log('Socket connected.');
+            console.log('DEBUG: Socket connected.');
         });
 
         socket.on('disconnect', () => {
             statusDiv.textContent = 'Disconnected';
-            console.log('Socket disconnected.');
+            console.log('DEBUG: Socket disconnected.');
         });
 
         socket.on('welcome', (data) => {
-            console.log('Welcome event received:', data);
+            console.log('DEBUG: Welcome event received:', data);
             statusDiv.textContent = 'Ready to start';
-            // deepgram_ready flag logic might be better handled server-side or
-            // ensure the client waits for a ready signal before sending audio.
-            // For now, assuming welcome means ready to click record.
         });
 
         socket.on('conversation', (data) => {
             const message = data.data;
-            console.log('Conversation message:', message);
-
-            // Show chat container
+            console.log('DEBUG: Conversation message received:', message);
             chatContainer.style.display = 'block';
-
-            // Add message to chat
             addMessage(message.text, message.role, message.sources);
         });
 
-        socket.on('tts_response', (data) => {
-            const text = data.data.text;
-            console.log('Playing TTS response:', text);
-            
-            // Stop recording while assistant speaks
+        socket.on('play_aura_audio', (data) => {
+            const audioBase64 = data.audio;
+            const audioFormat = data.format || 'wav';
+            console.log(`DEBUG: Received 'play_aura_audio' with format: ${audioFormat}`);
+
             if (isRecording) {
+                console.log("DEBUG: Stopping recording because assistant is about to speak.");
                 stopRecording();
             }
             
-            if ('speechSynthesis' in window) {
-                isAssistantSpeaking = true;
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.rate = 0.9;
-                utterance.pitch = 1;
-                
-                utterance.onend = () => {
-                    isAssistantSpeaking = false;
-                    console.log('TTS finished');
-                };
-                
-                speechSynthesis.speak(utterance);
-            }
+            isAssistantSpeaking = true;
+            recordingText.textContent = 'Assistant is speaking...';
+            microphoneButton.disabled = true;
+            microphoneButton.classList.add('speaking');
+
+            const audio = new Audio();
+            audio.src = `data:audio/${audioFormat};base64,${audioBase64}`;
+            
+            audio.onplay = () => {
+                console.log("DEBUG: Aura audio playback started.");
+            };
+            audio.onended = () => {
+                console.log("DEBUG: Aura audio playback finished.");
+                isAssistantSpeaking = false;
+                recordingText.textContent = 'Click to start recording';
+                microphoneButton.disabled = false;
+                microphoneButton.classList.remove('speaking');
+            };
+            audio.onerror = (e) => {
+                console.error("DEBUG: Error playing Aura audio:", e);
+                isAssistantSpeaking = false;
+                recordingText.textContent = 'Click to start recording';
+                microphoneButton.disabled = false;
+                microphoneButton.classList.remove('speaking');
+                addMessage("Error: Could not play assistant's voice.", "error");
+            };
+            
+            audio.play().catch(e => {
+                console.error("DEBUG: audio.play() promise rejected:", e);
+                isAssistantSpeaking = false;
+                recordingText.textContent = 'Click to start recording';
+                microphoneButton.disabled = false;
+                microphoneButton.classList.remove('speaking');
+            });
         });
 
         socket.on('thinking', (data) => {
-            console.log('Agent thinking:', data);
+            console.log('DEBUG: Agent thinking:', data);
             statusDiv.textContent = 'Agent is thinking...';
-            // Optionally update UI to show thinking state
         });
 
         socket.on('error', (data) => {
-            console.error('Error:', data);
-            statusDiv.textContent = `Error: ${data.data.message}`;
+            console.error('DEBUG: Error from backend:', data);
+            const errorMsg = data.data && data.data.message ? data.data.message : "Unknown error";
+            statusDiv.textContent = `Error: ${errorMsg}`;
             statusDiv.className = 'error';
-
-            // Add error message to chat
-            addMessage(`Error: ${data.data.message}`, 'error');
-            stopRecording(); // Stop recording on error
+            addMessage(`Error: ${errorMsg}`, 'error');
         });
 
         // Helper function to add messages to chat
@@ -337,12 +349,16 @@
         let audioContext, processor, input, globalStream;
 
         async function startRecording() {
+            if (isAssistantSpeaking) {
+                console.log("DEBUG: Assistant is speaking, cannot start recording now.");
+                return;
+            }
             if (isRecording) return;
 
             isRecording = true;
             recordingText.textContent = 'Recording...';
             microphoneButton.classList.add('recording');
-            // waveform visualizer could be started here
+            microphoneButton.classList.remove('speaking');
 
             audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
             try {
@@ -356,16 +372,13 @@
 
             input = audioContext.createMediaStreamSource(globalStream);
 
-            // Use AudioWorkletNode for better performance if available
             if (audioContext.audioWorklet) {
                 try {
-                     await audioContext.audioWorklet.addModule('static/audio-processor.js'); // Assuming you create this file
+                     await audioContext.audioWorklet.addModule('static/audio-processor.js');
                      processor = new AudioWorkletNode(audioContext, 'audio-processor');
-                     processor.connect(audioContext.destination); // Connect to destination to keep it alive
-
+                     processor.connect(audioContext.destination);
                      processor.port.onmessage = (event) => {
                          if (event.data.type === 'audioData') {
-                             // Convert Float32Array to Int16Array
                              let pcm = new Int16Array(event.data.audioBuffer.length);
                              for (let i = 0; i < event.data.audioBuffer.length; i++) {
                                  let s = Math.max(-1, Math.min(1, event.data.audioBuffer[i]));
@@ -375,48 +388,35 @@
                          }
                      };
                      input.connect(processor);
-
                 } catch (error) {
-                    console.warn('AudioWorklet not available or failed to load, falling back to ScriptProcessor:', error);
-                     // Fallback to ScriptProcessorNode
+                    console.warn('AudioWorklet fallback to ScriptProcessor:', error);
                      processor = audioContext.createScriptProcessor(4096, 1, 1);
                      input.connect(processor);
-                     processor.connect(audioContext.destination); // Connect to destination to keep it alive
-
+                     processor.connect(audioContext.destination);
                      processor.onaudioprocess = function(e) {
                         const inputData = e.inputBuffer.getChannelData(0);
-                        // Convert Float32Array [-1,1] to Int16Array
                         let pcm = new Int16Array(inputData.length);
                         for (let i = 0; i < inputData.length; i++) {
                             let s = Math.max(-1, Math.min(1, inputData[i]));
                             pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                         }
-                        // Send as ArrayBuffer
                          socket.emit('audio_data', pcm.buffer);
                     };
                 }
             } else {
-                 // Fallback to ScriptProcessorNode
                  processor = audioContext.createScriptProcessor(4096, 1, 1);
                  input.connect(processor);
-                 processor.connect(audioContext.destination); // Connect to destination to keep it alive
-
+                 processor.connect(audioContext.destination);
                  processor.onaudioprocess = function(e) {
                     const inputData = e.inputBuffer.getChannelData(0);
-                    // Convert Float32Array [-1,1] to Int16Array
                     let pcm = new Int16Array(inputData.length);
                     for (let i = 0; i < inputData.length; i++) {
                         let s = Math.max(-1, Math.min(1, inputData[i]));
                         pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                     }
-                    // Send as ArrayBuffer
                      socket.emit('audio_data', pcm.buffer);
                 };
             }
-
-
-            // Optional: Send a start recording event to the server if needed
-            // socket.emit('start_recording');
         }
 
         function stopRecording() {
@@ -425,30 +425,34 @@
             isRecording = false;
             recordingText.textContent = 'Click to start recording';
             microphoneButton.classList.remove('recording');
-            // waveform visualizer could be stopped here
+            microphoneButton.disabled = isAssistantSpeaking;
 
             if (processor) {
                 processor.disconnect();
-                 if (processor.port && processor.port.onmessage) processor.port.onmessage = null; // For AudioWorklet
-                 if (processor.onaudioprocess) processor.onaudioprocess = null; // For ScriptProcessor
+                 if (processor.port && processor.port.onmessage) processor.port.onmessage = null;
+                 if (processor.onaudioprocess) processor.onaudioprocess = null;
+                 processor = null;
             }
-            if (input) input.disconnect();
-            if (audioContext) audioContext.close().catch(e => console.error('Error closing AudioContext:', e));
+            if (input) {
+                input.disconnect();
+                input = null;
+            }
             if (globalStream) {
                 globalStream.getTracks().forEach(track => track.stop());
+                globalStream = null;
             }
-
-            // Optional: Send a stop recording event to the server if needed
-            // socket.emit('stop_recording');
+            if (audioContext && audioContext.state !== 'closed') {
+                audioContext.close().catch(e => console.error('Error closing AudioContext:', e));
+                audioContext = null;
+            }
+            console.log("DEBUG: Recording stopped and resources released.");
         }
 
-        // Toggle recording on microphone button click
         microphoneButton.addEventListener('click', () => {
             if (isAssistantSpeaking) {
-                console.log('Assistant is speaking, cannot start recording');
+                console.log("DEBUG: Assistant is speaking, microphone click ignored.");
                 return;
             }
-            
             if (isRecording) {
                 stopRecording();
             } else {
@@ -456,7 +460,6 @@
             }
         });
 
-        // Handle potential errors during getUserMedia
         navigator.mediaDevices.addEventListener('statechange', function() {
           if (isRecording && globalStream && globalStream.getTracks().every(track => track.readyState === 'ended')) {
               console.warn('Microphone disconnected during recording.');
@@ -465,13 +468,14 @@
           }
         });
 
-        // Basic handling for beforeunload to stop recording if page is closed
         window.addEventListener('beforeunload', () => {
             if (isRecording) {
                 stopRecording();
             }
+            if (socket.connected) {
+                socket.disconnect();
+            }
         });
-
     </script>
 </body>
 </html> 

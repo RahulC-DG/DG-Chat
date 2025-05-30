@@ -11,12 +11,17 @@ from deepgram import (
     Input,
     Output,
     AgentKeepAlive,
+    SpeakOptions,
 )
 import os
 import json
 from dotenv import load_dotenv
 import threading
 import time
+import base64
+import sys
+import openai
+
 load_dotenv()
 
 chatbot = DeepgramChat()
@@ -26,6 +31,12 @@ deepgram_ready = False
 
 # Add tracking for agent's recent speech to prevent feedback loops
 recent_agent_speech = []
+
+# Add a flag to track when we're playing audio
+agent_is_speaking = False
+
+# Add this global variable
+expecting_summary = False
 
 # Add debug prints for environment variables
 api_key = os.getenv("DEEPGRAM_API_KEY")
@@ -39,8 +50,8 @@ else:
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*", path='/socket.io')
 
-# Initialize Deepgram client
-config = DeepgramClientOptions(
+# Initialize Deepgram clients
+agent_config = DeepgramClientOptions(
     options={
         "keepalive": "true",
         "microphone_record": "true",        
@@ -49,21 +60,91 @@ config = DeepgramClientOptions(
 )
 
 try:
-    deepgram = DeepgramClient(api_key, config)
-    print("Successfully initialized Deepgram client")
+    # Client for Agent WebSocket (STT)
+    deepgram_agent_client = DeepgramClient(api_key, agent_config)
+    # Client for direct TTS API calls
+    deepgram_tts_client = DeepgramClient(api_key)
+    print("Successfully initialized Deepgram clients (Agent and TTS)")
 except Exception as e:
-    print(f"Error initializing Deepgram client: {str(e)}")
+    print(f"Error initializing Deepgram clients: {str(e)}")
     raise
 
-dg_connection = deepgram.agent.websocket.v("1")
+dg_connection = deepgram_agent_client.agent.websocket.v("1")
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
+# Function to generate speech with Aura-2 and send to client
+def generate_aura_speech_and_send_to_client(text):
+    print(f"DEBUG: TTS FUNCTION CALLED with text length: {len(text)}")
+    global agent_is_speaking
+    try:
+        print(f"DEBUG: Setting agent_is_speaking = True")
+        agent_is_speaking = True
+        
+        print(f"DEBUG: About to check text length: {len(text)} vs 1000")
+        if len(text) > 1000:
+            print(f"DEBUG: SUMMARIZATION TRIGGERED - Text too long ({len(text)} chars)")
+            try:
+                openai.api_key = os.getenv("OPENAI_API_KEY")
+                response = openai.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "Summarize this text for text-to-speech in under 1500 characters. Keep it conversational and preserve key information."},
+                        {"role": "user", "content": text}
+                    ],
+                    max_tokens=200,
+                    temperature=0.3
+                )
+                tts_text = response.choices[0].message.content.strip()
+                print(f"DEBUG: Summarized from {len(text)} to {len(tts_text)} characters")
+            except Exception as e:
+                print(f"DEBUG: Summarization failed: {e}, truncating instead")
+                tts_text = text[:1500] + "..."
+        else:
+            print(f"DEBUG: Text length OK ({len(text)} chars), no summarization needed")
+            tts_text = text
+            
+        print(f"DEBUG: TTS Request - Text: '{tts_text}'")
+        
+        # Configure TTS options for Aura-2
+        options = SpeakOptions(
+            model="aura-2-odysseus-en",
+            encoding="linear16",
+            sample_rate=16000,
+            container="wav"
+        )
+        
+        print("DEBUG: Calling Deepgram TTS API with Aura-2 (SDK 4.x stream)...")
+        response = deepgram_tts_client.speak.rest.v("1").stream_memory(
+            {"text": tts_text}, 
+            options
+        )
+        
+        # Get the actual bytes from BytesIO object
+        audio_bytes = response.stream_memory.getvalue()
+        print(f"DEBUG: TTS successful. Audio size: {len(audio_bytes)} bytes.")
+        
+        # Convert audio bytes to base64 for transmission
+        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+        print("DEBUG: Emitting 'play_aura_audio' to frontend.")
+        socketio.emit('play_aura_audio', {'audio': audio_base64})
+        
+        # Reset flag after a brief delay to account for audio playback
+        threading.Timer(len(audio_bytes) / 32000 + 1.0, lambda: setattr(sys.modules[__name__], 'agent_is_speaking', False)).start()
+        
+    except Exception as e:
+        agent_is_speaking = False  # Reset flag on error
+        print(f"DEBUG: Exception in generate_aura_speech_and_send_to_client: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        socketio.emit('error', {'data': {'message': f'TTS Generation Error: {str(e)}'}})
+
 @socketio.on('connect')
 def handle_connect():
     global deepgram_ready
+    print("DEBUG: Client connected.")
     options = SettingsOptions()
 
     # Configure audio input settings
@@ -85,7 +166,7 @@ def handle_connect():
     # Use a prompt that tells the agent to stay silent or minimal
     options.agent.think.prompt = (
         "You are a speech processing assistant. Your only job is to transcribe speech. "
-        "Do not generate responses. If you must respond, say only 'Processing...' and nothing else."
+        "Do not generate responses. If you must respond, say only '...' and nothing else."
     )
 
     # Keep speech recognition and synthesis
@@ -93,49 +174,50 @@ def handle_connect():
     options.agent.listen.provider.model = "nova-3"
     options.agent.listen.provider.type = "deepgram"
     options.agent.speak.provider.type = "deepgram"
+    options.agent.greeting = ""
 
-    # Remove or minimize greeting
-    options.agent.greeting = ""  # Empty greeting so it doesn't interfere
-
-    # Event handlers
     def on_open(self, open, **kwargs):
-        print("Open event received:", open.__dict__)
-        socketio.emit('open', {'data': open.__dict__})
+        print(f"DEBUG: Agent WS Open event: {open}")
+        socketio.emit('open', {'data': str(open)})
 
     def on_welcome(self, welcome, **kwargs):
         global deepgram_ready
-        print("Welcome event received:", welcome.__dict__)
+        print(f"DEBUG: Agent WS Welcome event: {welcome}")
         deepgram_ready = True
-        socketio.emit('welcome', {'data': welcome.__dict__})
+        socketio.emit('welcome', {'data': str(welcome)})
         
-        # Send our own greeting via TTS after connection is ready
-        greeting_message = "Hello! I'm your Deepgram voice assistant. How can I help you today?"
-        
-        # Send greeting to frontend
+        greeting_message = "Hello! I'm your Deepgram voice assistant, powered by Aura-2. How can I help you today?"
+        print(f"DEBUG: Handling welcome - sending greeting text for display: '{greeting_message}'")
         socketio.emit('conversation', {
             'data': {
                 'text': greeting_message,
                 'role': 'assistant'
             }
         })
+        print(f"DEBUG: Handling welcome - initiating Aura-2 speech for greeting.")
+        generate_aura_speech_and_send_to_client(greeting_message)
 
     def on_conversation_text(self, conversation_text, **kwargs):
-        print(f"on_conversation_text received: {conversation_text.__dict__}")
-
+        global agent_is_speaking
+        print(f"DEBUG: Agent WS on_conversation_text: {conversation_text.__dict__}")
         try:
             role = getattr(conversation_text, 'role', 'unknown')
             content = getattr(conversation_text, 'content', '')
 
-            # Only process user messages
             if role == 'user':
+                # Skip processing if agent is currently speaking (to avoid feedback loop)
+                if agent_is_speaking:
+                    print(f"DEBUG: Ignoring user STT while agent is speaking (feedback prevention): '{content}'")
+                    return
+                
                 user_message = content.strip()
-                print(f"Processing user message: '{user_message}'")
+                print(f"DEBUG: Processing user message for chatbot: '{user_message}'")
 
                 if not user_message:
-                    print("Empty user message, ignoring")
+                    print("DEBUG: Empty user message from STT, ignoring.")
                     return
 
-                # Send user message to frontend immediately
+                print(f"DEBUG: Sending user message text to frontend for display: '{user_message}'")
                 socketio.emit('conversation', {
                     'data': {
                         'text': user_message,
@@ -143,16 +225,15 @@ def handle_connect():
                     }
                 })
 
-                # Get chatbot response
                 try:
+                    print(f"DEBUG: Getting answer from chatbot for: '{user_message}'")
                     chat_result = chatbot.get_answer(user_message)
-                    chatbot_answer = chat_result.get("answer", "I'm sorry, I couldn't process your request.")
+                    chatbot_answer = chat_result.get("answer", "I'm sorry, I could not find an answer.")
                     sources = chat_result.get("sources", [])
                     metadata = chat_result.get("metadata", {})
+                    print(f"DEBUG: Chatbot responded with: '{chatbot_answer}'")
 
-                    print(f"Chatbot response: {chatbot_answer}")
-
-                    # Send chatbot response to frontend
+                    print(f"DEBUG: Sending chatbot text response to frontend for display.")
                     socketio.emit('conversation', {
                         'data': {
                             'text': chatbot_answer,
@@ -161,33 +242,35 @@ def handle_connect():
                             'role': 'assistant'
                         }
                     })
-
-                    # Convert text to speech and play it
-                    socketio.emit('tts_response', {
-                        'data': {
-                            'text': chatbot_answer
-                        }
-                    })
-
+                    
+                    print(f"DEBUG: Initiating Aura-2 speech for chatbot answer.")
+                    generate_aura_speech_and_send_to_client(chatbot_answer)
+                    
                 except Exception as e:
-                    error_msg = f"Error getting chatbot response: {str(e)}"
-                    print(error_msg)
+                    error_msg = f"Error getting chatbot response or processing TTS: {str(e)}"
+                    print(f"DEBUG: {error_msg}")
+                    import traceback
+                    traceback.print_exc()
                     socketio.emit('error', {'data': {'message': error_msg}})
-
+            
+            elif role == 'assistant':
+                print(f"DEBUG: Ignoring 'assistant' role message from Agent STT (likely agent's own minimal LLM): '{content}'")
             else:
-                print(f"Ignoring message with role: {role}")
+                print(f"DEBUG: Ignoring message from Agent STT with unhandled role '{role}': '{content}'")
 
         except Exception as e:
-            error_msg = f"Error in on_conversation_text: {str(e)}"
-            print(error_msg)
+            error_msg = f"Outer error in on_conversation_text: {str(e)}"
+            print(f"DEBUG: {error_msg}")
+            import traceback
+            traceback.print_exc()
             socketio.emit('error', {'data': {'message': error_msg}})
-
+    
     def on_agent_thinking(self, agent_thinking, **kwargs):
-        print("Thinking event received:", agent_thinking.__dict__)
+        print(f"DEBUG: Agent thinking: {agent_thinking.__dict__}")
         socketio.emit('thinking', {'data': agent_thinking.__dict__})
 
     def on_function_call_request(self, function_call_request: FunctionCallRequest, **kwargs):
-        print("Function call event received:", function_call_request.__dict__)
+        print(f"DEBUG: Function call request: {function_call_request.__dict__}")
         response = FunctionCallResponse(
             function_call_id=function_call_request.function_call_id,
             output="Function response here"
@@ -196,20 +279,17 @@ def handle_connect():
         socketio.emit('function_call', {'data': function_call_request.__dict__})
 
     def on_agent_started_speaking(self, agent_started_speaking, **kwargs):
-        print("Agent speaking event received:", agent_started_speaking.__dict__)
-        socketio.emit('agent_speaking', {'data': agent_started_speaking.__dict__})
+        print(f"DEBUG: Agent (internal) started speaking: {agent_started_speaking.__dict__}")
 
     def on_error(self, error, **kwargs):
-        print("Error event received:", error.__dict__)
+        print(f"DEBUG: Agent WS Error event: {error}")
         error_data = {
             'message': str(error),
-            'type': error.__class__.__name__,
-            'details': error.__dict__
+            'type': type(error).__name__,
+            'details': str(error)
         }
-        print("Sending error to client:", error_data)
         socketio.emit('error', {'data': error_data})
 
-    # Register event handlers
     dg_connection.on(AgentWebSocketEvents.Open, on_open)
     dg_connection.on(AgentWebSocketEvents.Welcome, on_welcome)
     dg_connection.on(AgentWebSocketEvents.ConversationText, on_conversation_text)
@@ -218,46 +298,45 @@ def handle_connect():
     dg_connection.on(AgentWebSocketEvents.AgentStartedSpeaking, on_agent_started_speaking)
     dg_connection.on(AgentWebSocketEvents.Error, on_error)
 
-    print("Starting Deepgram connection...")
+    print("DEBUG: Attempting to start Deepgram Agent WebSocket connection...")
     if not dg_connection.start(options):
-        print("Failed to start Deepgram connection")
-        socketio.emit('error', {'data': {'message': 'Failed to start connection'}})
+        print("ERROR: Failed to start Deepgram Agent WebSocket connection.")
+        socketio.emit('error', {'data': {'message': 'Failed to start Deepgram connection'}})
         return
-    print("Deepgram connection started successfully")
+    print("SUCCESS: Deepgram Agent WebSocket connection started.")
 
-    # Start keep-alive thread
     def keep_alive():
         while True:
             try:
+                print("DEBUG: Sending KeepAlive to Agent WS.")
                 dg_connection.send(str(AgentKeepAlive()))
-                print("Sent keep-alive message")
             except Exception as e:
-                print(f"Error sending keep-alive: {e}")
-            time.sleep(5)
+                print(f"DEBUG: Error sending KeepAlive: {str(e)}")
+            time.sleep(20)
 
     threading.Thread(target=keep_alive, daemon=True).start()
 
 @socketio.on('audio_data')
 def handle_audio_data(data):
-    global deepgram_ready # Access the global flag
-    try:
-        # Only send audio data if the deepgram connection is ready
-        if dg_connection and deepgram_ready:
-            print("Received audio data:", len(data), "bytes")
-            # Convert to bytes if needed
+    global deepgram_ready
+    if dg_connection and deepgram_ready:
+        try:
             if isinstance(data, list):
                 data = bytes(data)
             dg_connection.send(data)
-        else:
-            print("No Deepgram connection available")
-            socketio.emit('error', {'data': {'message': 'No Deepgram connection available'}})
-    except Exception as e:
-        print("Error handling audio data:", str(e))
-        socketio.emit('error', {'data': {'message': f'Error handling audio data: {str(e)}'}})
+        except Exception as e:
+            print(f"DEBUG: Error sending audio data to Agent WS: {str(e)}")
+            socketio.emit('error', {'data': {'message': f'Error sending audio: {str(e)}'}})
+    else:
+        print("DEBUG: Agent WS not ready or not available for audio_data.")
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    dg_connection.finish()
+    print("DEBUG: Client disconnected from Socket.IO.")
+    if dg_connection:
+        print("DEBUG: Finishing Deepgram Agent WebSocket connection.")
+        dg_connection.finish()
 
 if __name__ == '__main__':
+    print("DEBUG: Starting Flask-SocketIO server.")
     socketio.run(app, debug=True, port=3000, host='0.0.0.0')
