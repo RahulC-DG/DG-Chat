@@ -64,7 +64,7 @@ def generate_aura_speech_and_send_to_client(text):
                 response = openai.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": "Summarize this text for text-to-speech in under 1500 characters. Keep it conversational and preserve key information."},
+                        {"role": "system", "content": "Summarize this text for text-to-speech in under 1000 characters. Keep it conversational and preserve key information. Always end on a complete sentence."},
                         {"role": "user", "content": text}
                     ],
                     max_tokens=200,
@@ -109,6 +109,38 @@ def generate_aura_speech_and_send_to_client(text):
         import traceback
         traceback.print_exc()
         socketio.emit('error', {'data': {'message': f'TTS Generation Error: {str(e)}'}})
+
+def generate_and_stream_response(user_message):
+    """Generate response and TTS simultaneously for faster perceived response."""
+    import threading
+    
+    print(f"DEBUG: Getting answer from chatbot for: '{user_message}'")
+    chat_result = chatbot.get_answer(user_message)
+    chatbot_answer = chat_result.get("answer", "I'm sorry, I could not find an answer.")
+    sources = chat_result.get("sources", [])
+    metadata = chat_result.get("metadata", {})
+    
+    # Send text response immediately
+    print(f"DEBUG: Sending chatbot text response to frontend.")
+    socketio.emit('conversation', {
+        'data': {
+            'text': chatbot_answer,
+            'sources': sources,
+            'metadata': metadata,
+            'role': 'assistant',
+            'replace_loading': True
+        }
+    })
+    
+    # Start TTS generation in parallel (non-blocking)
+    print(f"DEBUG: Starting parallel TTS generation.")
+    tts_thread = threading.Thread(
+        target=generate_aura_speech_and_send_to_client, 
+        args=(chatbot_answer,)
+    )
+    tts_thread.start()
+    
+    return chatbot_answer
 
 def start_stt_connection():
     global stt_connection, is_listening
@@ -167,28 +199,7 @@ def start_stt_connection():
                         })
                         
                         try:
-                            print(f"DEBUG: Getting answer from chatbot for: '{user_message}'")
-                            chat_result = chatbot.get_answer(user_message)
-                            chatbot_answer = chat_result.get("answer", "I'm sorry, I could not find an answer.")
-                            sources = chat_result.get("sources", [])
-                            metadata = chat_result.get("metadata", {})
-                            print(f"DEBUG: Chatbot responded with: '{chatbot_answer}'")
-
-                            # Send response to frontend
-                            print(f"DEBUG: Sending chatbot text response to frontend.")
-                            socketio.emit('conversation', {
-                                'data': {
-                                    'text': chatbot_answer,
-                                    'sources': sources,
-                                    'metadata': metadata,
-                                    'role': 'assistant',
-                                    'replace_loading': True
-                                }
-                            })
-                            
-                            # Generate TTS
-                            print(f"DEBUG: Initiating Aura-2 speech for chatbot answer.")
-                            generate_aura_speech_and_send_to_client(chatbot_answer)
+                            generate_and_stream_response(user_message)
                             
                         except Exception as e:
                             error_msg = f"Error getting chatbot response: {str(e)}"

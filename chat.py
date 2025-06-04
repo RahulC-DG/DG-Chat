@@ -13,6 +13,7 @@ import numpy as np
 from datetime import datetime
 from collections import OrderedDict
 import hashlib
+import concurrent.futures
 
 
 # Load environment variables
@@ -70,7 +71,7 @@ class LRUCache:
                 best_result = cached_data
 
         # Return result if similarity is above threshold
-        if best_similarity >= 0.85:  # Adjust threshold as needed
+        if best_similarity >= 0.82:  # Lowered from 0.85 for more cache hits
             return best_result, best_similarity
         return None, 0.0
 
@@ -107,8 +108,9 @@ class DeepgramChat:
         
         # Initialize LLM
         self.llm = ChatOpenAI(
-            model_name=os.getenv("LLM_MODEL", "gpt-4-turbo-preview"),
-            temperature=0.7
+            model_name=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+            temperature=0.7,
+            streaming=True
         )
         
         # Initialize memory
@@ -118,7 +120,7 @@ class DeepgramChat:
         )
         
         # Initialize LRU cache
-        self.cache = LRUCache(capacity=100)
+        self.cache = LRUCache(capacity=200)
         
         # Create custom prompt template
         template = """You are a helpful AI assistant that specializes in Deepgram's APIs and SDKs. 
@@ -142,7 +144,7 @@ class DeepgramChat:
             llm=self.llm,
             retriever=self.docs_store.as_retriever(
                 search_type="similarity",
-                search_kwargs={"k": 5}
+                search_kwargs={"k": 3}
             ),
             memory=self.memory,
             combine_docs_chain_kwargs={"prompt": self.prompt}
@@ -163,12 +165,24 @@ class DeepgramChat:
                     }
                 }
         
-        # Get answer from QA chain
-        result = self.qa_chain({"question": question})
+        # Define search functions for parallel execution
+        def search_docs():
+            return self.docs_store.similarity_search(question, k=2)  # Reduced from 3
         
-        # Get relevant documents
-        docs = self.docs_store.similarity_search(question, k=3)
-        sdk_docs = self.sdk_store.similarity_search(question, k=2)
+        def search_sdk():
+            return self.sdk_store.similarity_search(question, k=1)  # Reduced from 2
+        
+        # Execute searches in parallel with QA chain
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future_docs = executor.submit(search_docs)
+            future_sdk = executor.submit(search_sdk)
+            
+            # Get answer from QA chain
+            result = self.qa_chain({"question": question})
+            
+            # Get search results
+            docs = future_docs.result()
+            sdk_docs = future_sdk.result()
         
         # Format sources
         sources = []
