@@ -50,6 +50,29 @@ Or
 ```bash
 pip3 install -r requirements.txt
 ```
+For PyAudio errors: Handle PyAudio Installation (if needed)
+
+PyAudio may require additional system dependencies:
+
+**On macOS:**
+```bash
+brew install portaudio
+pip install pyaudio
+```
+
+**On Ubuntu/Debian:**
+```bash
+sudo apt-get install portaudio19-dev python3-pyaudio
+pip install pyaudio
+```
+
+**On Windows:**
+PyAudio should install automatically with pip. If you encounter issues:
+```bash
+pip install pipwin
+pipwin install pyaudio
+```
+
 
 2. Create a .env file with your API keys:
 ```bash
