@@ -50,7 +50,7 @@ Or
 ```bash
 pip3 install -r requirements.txt
 ```
-# For PyAudio errors: Handle PyAudio Installation (if needed)
+**For PyAudio errors: Handle PyAudio Installation (if needed)**
 
 PyAudio may require additional system dependencies:
 
