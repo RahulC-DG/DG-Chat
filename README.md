@@ -46,6 +46,10 @@ Browser Audio → Deepgram STT → RAG Chatbot → Deepgram TTS → Browser Audi
 ```bash
 pip install -r requirements.txt
 ```
+or
+```bash
+pip3 install -r requirements.txt
+```
 
 2. Create a .env file with your API keys:
 ```bash
